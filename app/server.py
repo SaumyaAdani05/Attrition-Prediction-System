@@ -106,7 +106,10 @@ async def lifespan(app):
     
     # Initialize Neo4j driver
     try:
-        driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "password"))
+        driver = GraphDatabase.driver(
+            os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+            auth=(os.environ.get("NEO4J_USER", "neo4j"), os.environ.get("NEO4J_PASSWORD", "password"))
+        )
         driver.verify_connectivity()
         app.state.neo4j_driver = driver
     except Exception as e:
@@ -653,15 +656,18 @@ STRATEGIES = {
 }
 
 def run_simulation_task(job_id: str, strategy: ActionStrategy, employee_id: str, params: ActionParams):
-    JOB_STATUS[job_id] = "running"
+    with JOB_STATUS_LOCK:
+        JOB_STATUS[job_id] = "running"
     from pipeline import simulator_actions as sa
     try:
         strategy.apply(employee_id, params)
         sa.trigger_nightly_etl_ml()
         pipeline_store.reload()
-        JOB_STATUS[job_id] = "completed"
+        with JOB_STATUS_LOCK:
+            JOB_STATUS[job_id] = "completed"
     except Exception as e:
-        JOB_STATUS[job_id] = f"failed: {str(e)}"
+        with JOB_STATUS_LOCK:
+            JOB_STATUS[job_id] = f"failed: {str(e)}"
         logging.error(f"Simulation task failed: {e}")
 
 @app.post("/api/simulate-action")
@@ -684,19 +690,23 @@ def simulate_action(req: ActionRequest, background_tasks: BackgroundTasks):
 
 @app.get("/api/simulate-action/{job_id}")
 def get_simulation_status(job_id: str):
-    if job_id not in JOB_STATUS:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return {"job_id": job_id, "status": JOB_STATUS[job_id]}
+    with JOB_STATUS_LOCK:
+        if job_id not in JOB_STATUS:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {"job_id": job_id, "status": JOB_STATUS[job_id]}
 
 def run_retrain_task(job_id: str):
-    JOB_STATUS[job_id] = "running"
+    with JOB_STATUS_LOCK:
+        JOB_STATUS[job_id] = "running"
     from pipeline import simulator_actions as sa
     try:
         sa.trigger_nightly_etl_ml()
         pipeline_store.reload()
-        JOB_STATUS[job_id] = "completed"
+        with JOB_STATUS_LOCK:
+            JOB_STATUS[job_id] = "completed"
     except Exception as e:
-        JOB_STATUS[job_id] = f"failed: {str(e)}"
+        with JOB_STATUS_LOCK:
+            JOB_STATUS[job_id] = f"failed: {str(e)}"
         logging.error(f"Retrain task failed: {e}")
 
 @app.post("/api/retrain")
@@ -736,14 +746,17 @@ def update_employee_rating(employee_id: str, req: RatingRequest, background_task
             JOB_STATUS[job_id] = "pending"
         
         def run_rating_sync():
-            JOB_STATUS[job_id] = "running"
+            with JOB_STATUS_LOCK:
+                JOB_STATUS[job_id] = "running"
             from pipeline import simulator_actions as sa
             try:
                 sa.trigger_nightly_etl_ml()
                 pipeline_store.reload()
-                JOB_STATUS[job_id] = "completed"
+                with JOB_STATUS_LOCK:
+                    JOB_STATUS[job_id] = "completed"
             except Exception as e:
-                JOB_STATUS[job_id] = f"failed: {str(e)}"
+                with JOB_STATUS_LOCK:
+                    JOB_STATUS[job_id] = f"failed: {str(e)}"
                 logging.error(f"Rating sync failed: {e}")
                 
         background_tasks.add_task(run_rating_sync)
@@ -1010,7 +1023,9 @@ def attrition_simulation_graph_page():
     with open(page_path, 'r', encoding='utf-8') as f:
         return f.read()
 
+app.mount("/", StaticFiles(directory=os.path.dirname(__file__), html=True), name="static")
+
 if __name__ == "__main__":
     import uvicorn
     # Start web server
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

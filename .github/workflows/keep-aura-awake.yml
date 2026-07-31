@@ -1,0 +1,26 @@
+name: Keep Aura Awake
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install neo4j
+      - name: Ping Aura
+        env:
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+        run: |
+          python -c "
+          from neo4j import GraphDatabase
+          import os
+          driver = GraphDatabase.driver(os.environ['NEO4J_URI'], auth=(os.environ['NEO4J_USER'], os.environ['NEO4J_PASSWORD']))
+          driver.execute_query('RETURN 1')
+          driver.close()
+          "
