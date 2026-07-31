@@ -3,5 +3,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN python seed_db.py && python etl.py && python production_ml.py
-CMD ["python", "server.py"]
+RUN python pipeline/seed_db.py && python pipeline/etl.py && python pipeline/production_ml.py
+CMD ["python", "app/server.py"]
